@@ -9,9 +9,9 @@
 PLUGIN_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
 export PLUGIN_ROOT
 
-PRE_COMMAND="${PLUGIN_ROOT}/hooks/pre-command"
-POST_COMMAND="${PLUGIN_ROOT}/hooks/post-command"
-export PRE_COMMAND POST_COMMAND
+PRE_CHECKOUT="${PLUGIN_ROOT}/hooks/pre-checkout"
+PRE_EXIT="${PLUGIN_ROOT}/hooks/pre-exit"
+export PRE_CHECKOUT PRE_EXIT
 
 # Generate the RSA key once per test file rather than once per test — genrsa is
 # the slowest thing in the suite.
@@ -32,7 +32,8 @@ setup_test_env() {
   : > "$REDACTOR_LOG"
 
   PATH="${BATS_TEST_DIRNAME}/stubs:${PATH}"
-  export PATH CURL_LOG REDACTOR_LOG
+  export PATH CURL_LOG REDACTOR_LOG TEST_TMPDIR
+  unset GIT_CONFIG_COUNT
 
   export STUB_ACCESS_TOKEN="ghs_stubaccesstoken"
   export STUB_INSTALLATION_ID="87654321"
@@ -73,13 +74,13 @@ token_request_body() {
   sed -n 's/.* -d \({[^ ]*}\).*/\1/p' "$CURL_LOG"
 }
 
-# Run pre-command and then post-command the way buildkite-agent does: the hook
+# Run pre-checkout and then pre-exit the way buildkite-agent does: the hook
 # body is sourced, and the next hook runs as a child process. Only *exported*
 # variables cross that boundary, which is exactly what regressed.
 run_hook_pair() {
   bash -c '
     set -euo pipefail
-    source "$PRE_COMMAND"
-    "$POST_COMMAND"
+    source "$PRE_CHECKOUT"
+    "$PRE_EXIT"
   '
 }

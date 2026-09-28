@@ -1,5 +1,16 @@
 # Create GitHub App Token Buildkite Plugin
 
+## Braintrust checkout fork
+
+This fork creates the token in `pre-checkout` and configures an environment-only
+Git credential helper for HTTPS access to `github.com`. The helper reads the
+configured token variable and does not write credentials to disk. SSH checkout
+still needs separate SSH authentication. Cleanup runs in `pre-exit` so checkout
+failures also trigger token revocation.
+
+Use `braintrustdata/create-github-app-token` pinned to a full commit SHA in your
+pipeline. The upstream examples below describe the remaining configuration.
+
 A [Buildkite plugin](https://buildkite.com/docs/agent/v3/plugins) that creates GitHub App installation access tokens for authenticating with GitHub APIs in your Buildkite pipelines.
 
 This plugin is inspired by and provides similar functionality to the [actions/create-github-app-token](https://github.com/actions/create-github-app-token) GitHub Action.
@@ -425,7 +436,7 @@ that stub `curl` and `buildkite-agent`, so they never reach the GitHub API:
 bats tests
 ```
 
-`tests/revocation.bats` drives `pre-command` and `post-command` the way
+`tests/revocation.bats` drives `pre-checkout` and `pre-exit` the way
 `buildkite-agent` does — the hook body is sourced, then the next hook runs as a
 child process — because only *exported* variables survive that boundary. Any
 hand-off between the two hooks has to be tested through it to be meaningful.

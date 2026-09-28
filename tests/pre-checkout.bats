@@ -15,11 +15,11 @@ teardown() {
   teardown_test_env
 }
 
-# The variables the hook leaves behind for post-command, as buildkite-agent sees
+# The variables the hook leaves behind for pre-exit, as buildkite-agent sees
 # them: `export -p` lists exported variables only, so a plain assignment is
 # invisible here — which is the whole point.
 exported_env() {
-  bash -c 'source "$PRE_COMMAND" >/dev/null 2>&1; export -p'
+  bash -c 'source "$PRE_CHECKOUT" >/dev/null 2>&1; export -p'
 }
 
 @test "exports the token as GITHUB_TOKEN by default" {
@@ -36,6 +36,56 @@ exported_env() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'MY_GITHUB_TOKEN="ghs_stubaccesstoken"'* ]]
+}
+
+@test "authenticates Git over HTTPS before checkout without persisting the token" {
+  run bash -c '
+    export HOME="$TEST_TMPDIR" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+    source "$PRE_CHECKOUT" >/dev/null
+    printf "protocol=https\nhost=github.com\n\n" | git credential fill
+    test ! -e "$HOME/.gitconfig"
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"username=x-access-token"* ]]
+  [[ "$output" == *"password=ghs_stubaccesstoken"* ]]
+}
+
+@test "Git authentication supports a custom output variable and preserves existing environment config" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE="MY_GITHUB_TOKEN"
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=fetch.prune GIT_CONFIG_VALUE_0=true
+
+  run bash -c '
+    export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+    source "$PRE_CHECKOUT" >/dev/null
+    test "$(git config fetch.prune)" = true
+    printf "protocol=https\nhost=github.com\n\n" | git credential fill
+  '
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"password=ghs_stubaccesstoken"* ]]
+}
+
+@test "does not provide Git credentials for other hosts" {
+  run bash -c '
+    export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false
+    source "$PRE_CHECKOUT" >/dev/null
+    printf "protocol=https\nhost=example.com\n\n" | git credential fill
+  '
+
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"ghs_stubaccesstoken"* ]]
+}
+
+@test "does not persist credentials on Git store" {
+  run bash -c '
+    export HOME="$TEST_TMPDIR" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+    source "$PRE_CHECKOUT" >/dev/null
+    printf "protocol=https\nhost=github.com\nusername=x-access-token\npassword=ghs_stubaccesstoken\n\n" | git credential approve
+    test ! -e "$HOME/.git-credentials"
+  '
+
+  [ "$status" -eq 0 ]
 }
 
 @test "exports the installation id" {
@@ -73,7 +123,7 @@ exported_env() {
 }
 
 @test "registers the token with the agent redactor" {
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   run cat "$REDACTOR_LOG"
@@ -84,7 +134,7 @@ exported_env() {
   export TEST_APP_ID="999999"
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_APP_ID='$TEST_APP_ID'
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   run curl_calls
@@ -95,7 +145,7 @@ exported_env() {
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_CONTENTS="read"
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_PULL_REQUESTS="write"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   [ "$(token_request_body | jq -r '.permissions.contents')" = "read" ]
@@ -109,7 +159,7 @@ exported_env() {
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_WORKFLOWS="write"
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_ACTIONS="read"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   [ "$(token_request_body | jq -r '.permissions.workflows')" = "write" ]
@@ -121,7 +171,7 @@ exported_env() {
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_ORGANIZATION_PROJECTS="write"
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_SECRET_SCANNING_ALERTS="read"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   [ "$(token_request_body | jq -r '.permissions.members')" = "read" ]
@@ -132,7 +182,7 @@ exported_env() {
 @test "still honours the deprecated permission-organization-members" {
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_ORGANIZATION_MEMBERS="read"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   # The API permission has always been `members`; the old option name must not
@@ -143,7 +193,7 @@ exported_env() {
 }
 
 @test "omits permissions entirely when none are configured" {
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   # An absent `permissions` key makes the token inherit the installation's
@@ -154,7 +204,7 @@ exported_env() {
 @test "scopes the token to a comma-separated repository list" {
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES="repo1, repo2"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   [ "$(token_request_body | jq -c '.repositories')" = '["repo1","repo2"]' ]
@@ -165,7 +215,7 @@ exported_env() {
 repo2
 repo3"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   # The YAML block-scalar form the README documents: every entry has to survive,
@@ -174,7 +224,7 @@ repo3"
 }
 
 @test "omits repositories when none are configured" {
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 0 ]
   [ "$(token_request_body | jq -r 'has("repositories")')" = "false" ]
@@ -183,7 +233,7 @@ repo3"
 @test "fails when app-id is missing" {
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_APP_ID
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"app-id is required"* ]]
@@ -192,7 +242,7 @@ repo3"
 @test "fails when private-key is missing" {
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PRIVATE_KEY
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"private-key is required"* ]]
@@ -201,7 +251,7 @@ repo3"
 @test "fails with install instructions when the app is not installed" {
   export STUB_INSTALLATION_HTTP_CODE="404"
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"GitHub App is not installed on test-owner/test-repo"* ]]
@@ -210,7 +260,7 @@ repo3"
 @test "fails when the token request returns no token" {
   export STUB_ACCESS_TOKEN=""
 
-  run bash "$PRE_COMMAND"
+  run bash "$PRE_CHECKOUT"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"Failed to generate installation token"* ]]
