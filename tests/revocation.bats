@@ -5,7 +5,7 @@
 # skip-token-revoke is set to true)".
 #
 # These tests drive both hooks across the same process boundary buildkite-agent
-# puts between them — pre-command sourced, post-command spawned as a child — so
+# puts between them — pre-checkout sourced, pre-exit spawned as a child — so
 # they fail if the hand-off variables stop being exported.
 
 load 'test_helper'
@@ -29,10 +29,24 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Token revoked successfully"* ]]
 
-  # The DELETE must carry the token pre-command actually minted.
+  # The DELETE must carry the token pre-checkout actually minted.
   run curl_calls
   [[ "$output" == *"DELETE"*"https://api.github.com/installation/token"* ]]
   [[ "$output" == *"Authorization: token ghs_stubaccesstoken"* ]]
+}
+
+@test "revokes the token when checkout fails before the command" {
+  run bash -c '
+    set -euo pipefail
+    source "$PRE_CHECKOUT"
+    trap '\''"$PRE_EXIT"'\'' EXIT
+    exit 128
+  '
+
+  [ "$status" -eq 128 ]
+  [[ "$output" == *"Token revoked successfully"* ]]
+  run curl_calls
+  [[ "$output" == *"DELETE"*"https://api.github.com/installation/token"* ]]
 }
 
 @test "does not report the skip path when revocation is enabled" {
@@ -79,11 +93,11 @@ teardown() {
   [[ "$output" != *"DELETE"* ]]
 }
 
-@test "warns instead of revoking when the token never reaches post-command" {
-  # Stands in for a pre-command that failed before minting: post-command runs
+@test "warns instead of revoking when the token never reaches pre-exit" {
+  # Stands in for a pre-checkout that failed before minting: pre-exit runs
   # regardless, and must say the token is still live rather than imply the
   # caller turned revocation off.
-  run bash -c '"$POST_COMMAND"'
+  run bash -c '"$PRE_EXIT"'
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"⚠️"* ]]
